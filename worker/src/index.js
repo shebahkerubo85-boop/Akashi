@@ -87,6 +87,24 @@ async function tryModel(apiKey, model, messages) {
   return data.choices?.[0]?.message?.content || null;
 }
 
+async function webSearch(query) {
+  try {
+    const resp = await fetch(
+      "https://api.duckduckgo.com/?q=" + encodeURIComponent(query) + "&format=json&no_html=1",
+      { headers: { "User-Agent": "SanBot/1.0" } }
+    );
+    const data = await resp.json();
+    if (data.AbstractText) return data.AbstractText;
+    if (data.Answer) return data.Answer;
+    if (data.RelatedTopics && data.RelatedTopics.length > 0) {
+      return data.RelatedTopics.slice(0, 3).map(t => t.Text).join("\n");
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function callAI(env, systemPrompt, profile, history, query) {
   const contextParts = [
     { role: "system", content: systemPrompt },
@@ -102,6 +120,16 @@ async function callAI(env, systemPrompt, profile, history, query) {
     ...history.map(h => ({ role: h.role, content: h.content })),
     { role: "user", content: query }
   ];
+
+  // Search the web for additional context
+  let searchContext = "";
+  try {
+    const searchResult = await webSearch(query);
+    if (searchResult) {
+      searchContext = "\n\n[Web search result: " + searchResult + "]";
+      messages[messages.length - 1].content = query + searchContext;
+    }
+  } catch {}
 
   // Groq models in priority order
   for (const model of GROQ_MODELS) {
