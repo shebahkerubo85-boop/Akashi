@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 from pathlib import Path
 
 import google.generativeai as genai
@@ -34,9 +35,19 @@ MAX_HISTORY = 20
 def get_reply(user_id: int, message: str) -> str:
     history = conversations.setdefault(user_id, [])
     chat = model.start_chat(history=history)
-    response = chat.send_message(message)
-    conversations[user_id] = chat.history[-MAX_HISTORY:]
-    return response.text
+    for attempt in range(3):
+        try:
+            response = chat.send_message(message)
+            conversations[user_id] = chat.history[-MAX_HISTORY:]
+            return response.text
+        except Exception as e:
+            if "RESOURCE_EXHAUSTED" in str(e) or "quota" in str(e).lower():
+                wait = 35 * (attempt + 1)
+                logging.warning("Rate limited, retrying in %ds", wait)
+                time.sleep(wait)
+            else:
+                raise
+    return "I'm getting too many requests right now. Give me a minute."
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -62,15 +73,12 @@ def extract_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str | N
     if message.chat.type == "private":
         return text
 
-    # Group/channel: only act when tagged or when replying to someone
     if not mentioned and message.reply_to_message is None:
         return None
 
-    # If replying to a message, answer THAT message (the original question)
     if message.reply_to_message and message.reply_to_message.text:
         return message.reply_to_message.text
 
-    # Otherwise answer the text with the mention stripped out
     return text.replace(f"@{bot_username}", "").strip() or text
 
 
