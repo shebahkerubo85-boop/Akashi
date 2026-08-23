@@ -3,7 +3,7 @@ import logging
 import time
 from pathlib import Path
 
-import google.generativeai as genai
+from openai import OpenAI
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
@@ -17,16 +17,14 @@ from telegram.ext import (
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
-GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
+GROQ_API_KEY = os.environ["GROQ_API_KEY"]
 
-genai.configure(api_key=GEMINI_API_KEY)
+client = OpenAI(
+    api_key=GROQ_API_KEY,
+    base_url="https://api.groq.com/openai/v1",
+)
 
 SYSTEM_PROMPT_TEXT = (Path(__file__).parent / "system_prompt.md").read_text(encoding="utf-8")
-
-model = genai.GenerativeModel(
-    model_name="gemini-3.6-flash",
-    system_instruction=SYSTEM_PROMPT_TEXT,
-)
 
 conversations: dict[int, list] = {}
 MAX_HISTORY = 20
@@ -34,20 +32,29 @@ MAX_HISTORY = 20
 
 def get_reply(user_id: int, message: str) -> str:
     history = conversations.setdefault(user_id, [])
-    chat = model.start_chat(history=history)
+    messages = [{"role": "system", "content": SYSTEM_PROMPT_TEXT}] + history + [{"role": "user", "content": message}]
+    
     for attempt in range(3):
         try:
-            response = chat.send_message(message)
-            conversations[user_id] = chat.history[-MAX_HISTORY:]
-            return response.text
+            response = client.chat.completions.create(
+                model="openai/gpt-oss-120b",
+                messages=messages,
+                max_tokens=1024,
+                temperature=0.8,
+            )
+            reply_text = response.choices[0].message.content
+            conversations[user_id].append({"role": "user", "content": message})
+            conversations[user_id].append({"role": "assistant", "content": reply_text})
+            conversations[user_id] = conversations[user_id][-MAX_HISTORY:]
+            return reply_text
         except Exception as e:
-            if "RESOURCE_EXHAUSTED" in str(e) or "quota" in str(e).lower():
-                wait = 35 * (attempt + 1)
+            if "rate_limit" in str(e).lower() or "429" in str(e):
+                wait = 10 * (attempt + 1)
                 logging.warning("Rate limited, retrying in %ds", wait)
                 time.sleep(wait)
             else:
                 raise
-    return "I'm getting too many requests right now. Give me a minute."
+    return "Give me a sec — too many requests right now."
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
