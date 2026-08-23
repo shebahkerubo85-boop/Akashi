@@ -121,15 +121,25 @@ async function callAI(env, systemPrompt, profile, history, query) {
     { role: "user", content: query }
   ];
 
-  // Search the web for additional context
+  // Only search web for anime-related queries
+  const animeKeywords = ["anime","manga","episode","season","sanin","dantotsu","anilist",
+    "myanimelist","extension","sub","dub","streaming","watch","player","subtitle",
+    "fire tv","android tv","shield","apk","source","repo","crash","bug","install",
+    "download","update","tracking","simkl","tmdb","cloudstream","exoplayer","pip",
+    "otaku","waifu","shounen","isekai","release","airing"];
+  const lowerQuery = query.toLowerCase();
+  const isAnimeRelated = animeKeywords.some(k => lowerQuery.includes(k));
+
   let searchContext = "";
-  try {
-    const searchResult = await webSearch(query);
-    if (searchResult) {
-      searchContext = "\n\n[Web search result: " + searchResult + "]";
-      messages[messages.length - 1].content = query + searchContext;
-    }
-  } catch {}
+  if (isAnimeRelated) {
+    try {
+      const searchResult = await webSearch(query);
+      if (searchResult) {
+        searchContext = "\n\n[Web search result: " + searchResult + "]";
+        messages[messages.length - 1].content = query + searchContext;
+      }
+    } catch {}
+  }
 
   // Groq models in priority order
   for (const model of GROQ_MODELS) {
