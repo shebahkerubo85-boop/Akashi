@@ -1,0 +1,14 @@
+name = "san-bot"
+main = "src/index.js"
+compatibility_date = "2024-01-01"
+
+[vars]
+SYSTEM_PROMPT_URL = "https://raw.githubusercontent.com/shebahkerubo85-boop/Akashi/main/system_prompt.md"
+
+
+[[kv_namespaces]]
+binding = "USER_MEMORY"
+id = "842905df612e4779a066fda030f4c887"
+
+[ai]
+binding = "AI"

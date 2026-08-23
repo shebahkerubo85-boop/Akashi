@@ -349,12 +349,9 @@ AniyomiAdapter bridges the Tachiyomi AnimeSource API
        ↓
 Ex
 
-### Latest Release (0.2.232)
+### Latest Release (0.2.233)
 
-# v0.2.232
+# v0.2.233
 
-### ea0610c7 — Fix unresolved 'size' ref in NavPillAnimator (use indicatorSize field)
-Fix unresolved 'size' ref in NavPillAnimator (use indicatorSize field)
-
-### 23c86a2e — Fix radius type mismatch: use Float division for cornerRadius
-Fix radius type mismatch: use Float division for cornerRadius
+### 3b235f47 — Fix nav pill tab switching + MediaInfoFragment post-NPE crash
+- Pills now call selectTab (not just animate) so Info/Watch/Comments switch - updateMediaNavIconTints no longer overrides click listeners; animator created once - Guard nested post callbacks in MediaInfoFragment against destroyed binding
