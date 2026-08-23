@@ -95,10 +95,23 @@ def extract_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str | N
     if not mentioned and message.reply_to_message is None:
         return None
 
+    # What the user actually typed (strip the mention)
+    user_text = text.replace(f"@{bot_username}", "").strip()
+
+    # If they typed their own question, prioritize it
+    if user_text:
+        if message.reply_to_message and message.reply_to_message.text:
+            sep = chr(10) + chr(10)
+            return ("Previous message for context: "
+                    + message.reply_to_message.text
+                    + sep + "My actual question: " + user_text)
+        return user_text
+
+    # No own text — just a tag on a reply, answer the replied message
     if message.reply_to_message and message.reply_to_message.text:
         return message.reply_to_message.text
 
-    return text.replace(f"@{bot_username}", "").strip() or text
+    return text
 
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
