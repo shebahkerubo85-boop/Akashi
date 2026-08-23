@@ -1,6 +1,8 @@
 import os
 import logging
 import time
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import user_memory
 
@@ -113,6 +115,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await update.message.reply_text("Something broke on my end. Try again.")
 
 
+class _PingHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"San is alive")
+    def log_message(self, *args):
+        pass
+
+def _start_ping_server() -> None:
+    server = HTTPServer(("0.0.0.0", 8080), _PingHandler)
+    server.serve_forever()
+
 def main() -> None:
     app = (
         Application.builder()
@@ -125,6 +139,7 @@ def main() -> None:
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("clear", clear))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    threading.Thread(target=_start_ping_server, daemon=True).start()
     print("San is running...")
     app.run_polling()
 
