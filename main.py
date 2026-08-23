@@ -14,6 +14,11 @@ from telegram.ext import (
     filters,
 )
 
+import subprocess
+import sys
+from pathlib import Path as _Path
+subprocess.run([sys.executable, str(_Path(__file__).parent / "update_knowledge.py")], capture_output=True)
+
 load_dotenv()
 
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
