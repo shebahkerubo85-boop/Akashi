@@ -35,9 +35,10 @@ conversations: dict[int, list] = {}
 MAX_HISTORY = 20
 
 
-def get_reply(user_id: int, message: str) -> str:
+def get_reply(user_id: int, message: str, display_name: str) -> str:
     history = conversations.setdefault(user_id, [])
-    messages = [{"role": "system", "content": SYSTEM_PROMPT_TEXT}] + history + [{"role": "user", "content": message}]
+    context_line = f"[The person you are talking to is: {display_name}]"
+    messages = [{"role": "system", "content": SYSTEM_PROMPT_TEXT}, {"role": "system", "content": context_line}] + history + [{"role": "user", "content": message}]
     
     for attempt in range(3):
         try:
@@ -99,7 +100,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not query:
         return
     try:
-        reply = get_reply(update.effective_user.id, query)
+        display_name = update.effective_user.first_name or update.effective_user.username or "Unknown"
+        reply = get_reply(update.effective_user.id, query, display_name)
         await update.message.reply_text(reply)
     except Exception:
         logging.exception("Error generating reply")
