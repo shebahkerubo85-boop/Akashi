@@ -161,8 +161,9 @@ export default {
 
       ctx.waitUntil(saveUserHistory(env, extracted.userId, extracted.displayName, history));
 
+      const cleanReply = reply.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
       const chatId = extracted.replyTo || update.message?.chat?.id;
-      await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, reply);
+      await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, cleanReply);
 
       return new Response("ok", { status: 200 });
     } catch (err) {
