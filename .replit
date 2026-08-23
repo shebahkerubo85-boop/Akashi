@@ -1,0 +1,11 @@
+run = "python main.py"
+entrypoint = "main.py"
+
+[env]
+PYTHONPATH = "."
+
+[nix]
+channel = "stable-23_11"
+
+[python]
+writeIndirectPackages = true
