@@ -14,6 +14,47 @@ async function getPrompt(env) {
   return cachedPrompt;
 }
 
+async function callAIWithHistory(env, messages) {
+  const models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b"];
+  
+  // Strip reasoning from system prompt for cleaner output
+  const cleanedMessages = messages.map(m => ({
+    role: m.role,
+    content: m.role === "system" ? m.content.replace(/<think>[\s\S]*?<\/think>/g, "").trim() : m.content
+  }));
+  
+  for (const model of models) {
+    try {
+      const body = { model, messages: cleanedMessages, max_tokens: 1024, temperature: 0.8 };
+      if (model.includes("gpt-oss")) body.reasoning_effort = "low";
+      
+      const r = await fetch(GROQ_API, {
+        method: "POST",
+        headers: { Authorization: "Bearer " + env.GROQ_API_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      if (!r.ok) continue;
+      const d = await r.json();
+      let txt = d.choices?.[0]?.message?.content || "";
+      // Also check reasoning field for gpt-oss models
+      if (!txt.trim() && d.choices?.[0]?.message?.reasoning) {
+        const parts = d.choices[0].message.reasoning.split("\n\n");
+        txt = parts[parts.length - 1].trim();
+      }
+      txt = txt.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+      if (txt) return txt;
+    } catch(e) { console.error(model, e.message); continue; }
+  }
+  
+  if (env.AI) {
+    try {
+      const r = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", { messages: cleanedMessages });
+      if (r?.response) return r.response;
+    } catch {}
+  }
+  throw new Error("all models failed");
+}
+
 async function ai(env, sysPrompt, query) {
   const models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b"];
   for (const m of models) {
@@ -265,30 +306,56 @@ export default {
         return Response.json({ status: "rejected_alternative" });
       }
 
-      // Check: user insisting on same thing repeatedly? Send tired sticker.
-      const insistKey = "insist_" + msg.from.id;
-      let insistCount = 0;
+      // Tired sticker: only if user sends the SAME text 3+ times in a row
+      const repeatKey = "repeat_" + msg.from.id;
+      let lastMsg = "";
+      let repeatCount = 0;
       try {
-        const raw = await env.USER_MEMORY.get(insistKey);
-        if (raw) insistCount = parseInt(raw);
+        const raw = await env.USER_MEMORY.get(repeatKey);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          lastMsg = parsed.text;
+          repeatCount = parsed.count;
+        }
       } catch {}
-      
-      await env.USER_MEMORY.put(insistKey, String(insistCount + 1));
-      
-      if (insistCount >= 2) {
+
+      if (query.toLowerCase() === lastMsg.toLowerCase()) {
+        repeatCount++;
+      } else {
+        repeatCount = 0; // Different message, reset
+      }
+
+      await env.USER_MEMORY.put(repeatKey, JSON.stringify({ text: query, count: repeatCount }));
+
+      if (repeatCount === 2) {
+        // Exactly on the 3rd identical message, send tired sticker once
         await fetch(TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendSticker", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ chat_id: msg.chat.id, sticker: STICKER_TIRED })
         });
-        // Reset counter so it doesn't fire every message forever
-        if (insistCount >= 4) {
-          await env.USER_MEMORY.put(insistKey, "0");
-        }
       }
 
-      // Get AI reply
-      const reply = await ai(env, fullSys, query);
+      // Load conversation history for this user
+      let history = [];
+      try {
+        const raw = await env.USER_MEMORY.get("chat_" + msg.from.id);
+        if (raw) history = JSON.parse(raw);
+      } catch {}
+
+      // Get AI reply with conversation context
+      let aiMessages;
+      try {
+        aiMessages = [
+          { role: "system", content: fullSys },
+          ...history.slice(-10).map(h => ({ role: h.r, content: h.c })),
+          { role: "user", content: query }
+        ];
+      } catch {
+        aiMessages = [{ role: "system", content: fullSys }, { role: "user", content: query }];
+      }
+
+      const reply = await callAIWithHistory(env, aiMessages);
 
       // Send to Telegram
       const sendUrl = TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendMessage";
@@ -329,7 +396,7 @@ export default {
           }
           
           // Send mood-matched sticker WITHOUT any additional text
-          if (detectedMood && moodStickers[detectedMood]) {
+          if (detectedMood && moodStickers[detectedMood] && Math.random() < 0.3) {
             await fetch(TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendSticker", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
