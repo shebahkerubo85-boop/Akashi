@@ -174,7 +174,27 @@ export default {
         }
         const knowledge = query.replace("/learn", "").trim();
         
-        // Sticker learning: /learn sticker <keyword> <file_id>
+        // Sticker learning: /learn sticker <mood> <file_id>
+        if (knowledge.startsWith("sticker ")) {
+          const parts = knowledge.replace("sticker ", "").split(" ");
+          if (parts.length >= 2) {
+            const mood = parts[0].toLowerCase();
+            const fileId = parts.slice(1).join(" ");
+            let stickers = {};
+            try {
+              const raw = await env.USER_MEMORY.get("mood_stickers");
+              if (raw) stickers = JSON.parse(raw);
+            } catch {}
+            stickers[mood] = fileId;
+            await env.USER_MEMORY.put("mood_stickers", JSON.stringify(stickers));
+            await fetch(TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendMessage", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: msg.chat.id, text: "Got it. I'll send that sticker when things feel '" + mood + "'." })
+            });
+            return new Response(JSON.stringify({ status: "sticker_learned" }), { headers: { "Content-Type": "application/json" } });
+          }
+        }
         if (knowledge.startsWith("sticker ")) {
           const parts = knowledge.replace("sticker ", "").split(" ");
           if (parts.length >= 2) {
@@ -240,7 +260,42 @@ export default {
         console.error("Telegram send failed:", errBody);
       }
 
-      // Check for sticker triggers
+      // Detect mood from query and send matching sticker (no extra text/link)
+      try {
+        const moodRaw = await env.USER_MEMORY.get("mood_stickers");
+        if (moodRaw) {
+          const moodStickers = JSON.parse(moodRaw);
+          const lower = query.toLowerCase();
+          
+          // Mood detection keywords
+          const moodMap = {
+            happy: ["lol","haha","great","awesome","amazing","thanks","love","congrats","nice","cool"],
+            sad: ["sad","bad","terrible","awful","disappointed","unfortunately","sucks","rip"],
+            angry: ["angry","mad","frustrated","annoying","hate","stupid","broken","wtf"],
+            serious: ["how","what","why","help","fix","error","issue","problem","install","setup"],
+            funny: ["joke","funny","meme","lmao","rofl"]
+          };
+          
+          // Find matching mood (priority order matters)
+          let detectedMood = null;
+          for (const [mood, keywords] of Object.entries(moodMap)) {
+            if (keywords.some(k => lower.includes(k))) {
+              detectedMood = mood;
+              break;
+            }
+          }
+          
+          // Send mood-matched sticker WITHOUT any additional text
+          if (detectedMood && moodStickers[detectedMood]) {
+            await fetch(TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendSticker", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: msg.chat.id, sticker: moodStickers[detectedMood] })
+            });
+          }
+        }
+      } catch(e) { console.error("sticker err:", e.message); }
+
       try {
         const stickersRaw = await env.USER_MEMORY.get("sticker_triggers");
         if (stickersRaw) {
