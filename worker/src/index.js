@@ -22,6 +22,30 @@ async function getSystemPrompt(env) {
   }
 }
 
+async function handleLearnCommand(env, message) {
+  const text = message.text;
+  if (!text.startsWith("/learn")) return false;
+  if (!text.slice(6).trim()) return true;
+
+  const userId = String(message.from.id);
+  // Get existing knowledge
+  let knowledge = [];
+  try {
+    const raw = await env.USER_MEMORY.get("learned_knowledge");
+    if (raw) knowledge = JSON.parse(raw);
+  } catch {}
+  
+  knowledge.push({
+    added: Date.now(),
+    by: message.from.first_name,
+    content: text.slice(7).trim()
+  });
+
+  await env.USER_MEMORY.put("learned_knowledge", JSON.stringify(knowledge));
+  await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, message.chat.id, "Noted. Filed away.");
+  return true;
+}
+
 function extractQuery(update, botUsername) {
   const message = update.message || update.edited_message;
   if (!message || !message.text) return null;
@@ -106,8 +130,18 @@ async function webSearch(query) {
 }
 
 async function callAI(env, systemPrompt, profile, history, query) {
+  let learned = "";
+  try {
+    const raw = await env.USER_MEMORY.get("learned_knowledge");
+    if (raw) {
+      const items = JSON.parse(raw);
+      learned = items.map(k => k.content).join("\n");
+    }
+  } catch {}
+
   const contextParts = [
     { role: "system", content: systemPrompt },
+    ...(learned ? [{ role: "system", content: "[Additional knowledge you have been taught:\n" + learned + "]" }] : []),
     { role: "system", content: "[You are talking to: " + (profile ? profile.name : "someone") + "]" }
   ];
 
@@ -179,6 +213,13 @@ export default {
       const botInfo = await fetch(TELEGRAM_API + env.TELEGRAM_BOT_TOKEN + "/getMe");
       const botData = await botInfo.json();
       const botUsername = botData.result.username;
+
+      // Check for /learn command
+      const msg = update.message || update.edited_message;
+      if (msg && msg.text && msg.text.startsWith("/learn")) {
+        ctx.waitUntil(handleLearnCommand(env, msg));
+        return new Response("ok", { status: 200 });
+      }
 
       const extracted = extractQuery(update, botUsername);
       if (!extracted) return new Response("ignored", { status: 200 });
