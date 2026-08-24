@@ -52,7 +52,7 @@ export default {
     if (request.headers.get("x-signature-ed25519")) {
       try {
         const i = await request.json();
-        if (i.type === 1) return Response.json({ type: 1 });
+        if (i.type === 1) return new Response(JSON.stringify({ type: 1 }), { headers: { "Content-Type": "application/json" } });
         if (i.type === 2 && i.data?.name === "ask") {
           const q = i.data.options?.[0]?.value || "";
           ctx.waitUntil((async () => {
@@ -64,7 +64,7 @@ export default {
               body: JSON.stringify({ content: reply.slice(0, 1900) })
             });
           })().catch(console.error));
-          return Response.json({ type: 5 });
+          return new Response(JSON.stringify({ type: 5 }), { headers: { "Content-Type": "application/json" } });
         }
       } catch(e) { console.error("discord err:", e.message); }
       return new Response("ok");
@@ -74,7 +74,7 @@ export default {
     try {
       const update = await request.json();
       const msg = update.message || update.edited_message;
-      if (!msg || !msg.text) return Response.json({ status: "no_text" });
+      if (!msg || !msg.text) return new Response(JSON.stringify({ status: "no_text" }), { headers: { "Content-Type": "application/json" } });
 
       const text = msg.text;
       const chatType = msg.chat.type;
@@ -83,7 +83,7 @@ export default {
 
       // Groups: only respond when tagged or replying
       if (chatType !== "private" && !mentioned && !msg.reply_to_message) {
-        return Response.json({ status: "ignored_group" });
+        return new Response(JSON.stringify({ status: "ignored_group" }), { headers: { "Content-Type": "application/json" } });
       }
 
       let query = text;
@@ -94,7 +94,7 @@ export default {
         }
       }
 
-      if (!query) return Response.json({ status: "no_query" });
+      if (!query) return new Response(JSON.stringify({ status: "no_query" }), { headers: { "Content-Type": "application/json" } });
 
       // /learn command
       if (query.startsWith("/learn")) {
@@ -113,7 +113,7 @@ export default {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ chat_id: msg.chat.id, text: knowledge ? "Noted." : "Usage: /learn <text>" })
         });
-        return Response.json({ status: "learned" });
+        return new Response(JSON.stringify({ status: "learned" }), { headers: { "Content-Type": "application/json" } });
       }
 
       // Load knowledge + history
@@ -144,10 +144,10 @@ export default {
         console.error("Telegram send failed:", errBody);
       }
 
-      return Response.json({ status: "replied" });
+      return new Response(JSON.stringify({ status: "replied" }), { headers: { "Content-Type": "application/json" } });
     } catch (err) {
       console.error("telegram handler error:", err.message);
-      return Response.json({ error: err.message }, { status: 200 });
+      return new Response(JSON.stringify({ error: err.message }, { status: 200 }), { headers: { "Content-Type": "application/json" } });
     }
   }
 };
