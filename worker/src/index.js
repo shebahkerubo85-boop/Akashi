@@ -216,7 +216,14 @@ export default {
       return new Response("ok", { status: 200 });
     } catch (err) {
       console.error("Worker error:", err.message);
-      return new Response("error: " + err.message, { status: 500 });
+      try {
+        const update = await request.clone().json();
+        const chatId = update.message?.chat?.id;
+        if (chatId) {
+          await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, "Something broke on my end. Give me a minute.");
+        }
+      } catch {}
+      return new Response("ok", { status: 200 });
     }
   }
 };
