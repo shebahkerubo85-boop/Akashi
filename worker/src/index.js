@@ -1,5 +1,6 @@
 const GROQ_API = "https://api.groq.com/openai/v1/chat/completions";
 const TELEGRAM = "https://api.telegram.org/bot";
+const ADMIN_IDS = ["7041986434"];
 
 let cachedPrompt = null;
 
@@ -161,8 +162,16 @@ export default {
 
       if (!query) return new Response(JSON.stringify({ status: "no_query" }), { headers: { "Content-Type": "application/json" } });
 
-      // /learn command
+      // /learn command - admin only
       if (query.startsWith("/learn")) {
+        if (!ADMIN_IDS.includes(String(msg.from.id))) {
+          await fetch(TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendMessage", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: msg.chat.id, text: "Only Shippun can use this." })
+          });
+          return Response.json({ status: "denied" });
+        }
         const knowledge = query.replace("/learn", "").trim();
         if (knowledge) {
           let learned = [];

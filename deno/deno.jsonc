@@ -1,0 +1,9 @@
+{
+  "deploy": {
+    "org": "shemaus58",
+    "app": "examples-hello-world"
+  }
+}
+
+
+
