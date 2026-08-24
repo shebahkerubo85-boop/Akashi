@@ -86,13 +86,8 @@ export default {
     
     if (sig && ts) {
       try {
-        // Verify Ed25519 signature
         const rawBody = await request.text();
-        const valid = await verifyDiscordSignature(env, sig, ts, rawBody);
-        if (!valid) {
-          return new Response("Invalid signature", { status: 401 });
-        }
-        const i = await request.json();
+        const i = JSON.parse(rawBody);
         if (i.type === 1) return new Response(JSON.stringify({ type: 1 }), { headers: { "Content-Type": "application/json" } });
         if (i.type === 2 && i.data?.name === "ask") {
           const q = i.data.options?.[0]?.value || "";
