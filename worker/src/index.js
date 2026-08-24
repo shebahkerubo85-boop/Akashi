@@ -371,6 +371,7 @@ export default {
       } catch {}
 
       const reply = await callAI(env, systemPrompt, profile, history, extracted.query);
+      console.log("AI REPLY:", reply ? reply.substring(0, 100) : "NULL");
 
       history.push({ role: "user", content: extracted.query });
       history.push({ role: "assistant", content: reply });
@@ -390,18 +391,12 @@ export default {
       }
       const chatId = extracted.replyTo || update.message?.chat?.id;
       await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, cleanReply);
+      console.log("SENT OK");
 
       return new Response("ok", { status: 200 });
     } catch (err) {
       console.error("Worker error:", err.message);
-      try {
-        const update = await request.clone().json();
-        const chatId = update.message?.chat?.id;
-        if (chatId) {
-          await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, "Something broke on my end. Give me a minute.");
-        }
-      } catch {}
-      return new Response("ok", { status: 200 });
+      return new Response(JSON.stringify({error: err.message}), { status: 200, headers: {"Content-Type": "application/json"} });
     }
   }
 };
