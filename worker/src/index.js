@@ -106,6 +106,35 @@ export default {
       return new Response("ok");
     }
 
+    // Dedicated Discord interaction endpoint
+    const url = new URL(request.url);
+    if (url.pathname === "/discord" && request.method === "POST") {
+      try {
+        const i = await request.json();
+        if (i.type === 1) {
+          return new Response(JSON.stringify({ type: 1 }), { headers: { "Content-Type": "application/json" } });
+        }
+        if (i.type === 2 && i.data?.name === "ask") {
+          const q = i.data.options?.[0]?.value || "";
+          ctx.waitUntil((async () => {
+            const sp = await getPrompt(env);
+            const reply = await ai(env, sp, q);
+            const clean = reply.replace(/<think>[\s\S]*?<\/think>/g, "").trim().slice(0, 1900);
+            await fetch("https://discord.com/api/v10/webhooks/" + env.DISCORD_APP_ID + "/" + i.token, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ content: clean })
+            });
+          })().catch(console.error));
+          return new Response(JSON.stringify({ type: 5 }), { headers: { "Content-Type": "application/json" } });
+        }
+        return new Response(JSON.stringify({ type: 1 }), { headers: { "Content-Type": "application/json" } });
+      } catch(e) {
+        console.error("discord:", e.message);
+      }
+      return new Response("ok");
+    }
+
     // Telegram
     try {
       const update = await request.json();
