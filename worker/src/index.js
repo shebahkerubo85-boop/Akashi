@@ -3,7 +3,7 @@ const TELEGRAM = "https://api.telegram.org/bot";
 const ADMIN_IDS = ["7041986434"];
 const STICKER_DISAGREE = "CAACAgEAAxkBAAOzaowuSsDLrzZs5tdJFaxWKwaQQBUAAhkBAAJ1NVFGVnsz3kkBIMY9BA";
 const STICKER_TIRED = "CAACAgEAAxUAAWqMNUGqh5HH1K7FXwm1RT8b28KFAAITAQACuBNZRihh09QKEni_PQQ";
-const ALTERNATIVE_KEYWORDS = ["alternative", "alternative to sanin", "sanin alternative", "better than sanin", "like sanin but", "similar to sanin", "apps like sanin", "other apps like sanin", "instead of sanin", "replace sanin"];
+const ALTERNATIVE_KEYWORDS = ["alternative to sanin", "sanin alternative", "better than sanin", "like sanin but", "similar to sanin", "apps like sanin", "other apps like sanin", "instead of sanin", "replace sanin", "sanin competitor", "something other than sanin", "anything besides sanin"];
 
 let cachedPrompt = null;
 
@@ -290,7 +290,7 @@ export default {
 
       // Check: user asking for Sanin alternative? Shut it down.
       const lowerQuery = query.toLowerCase();
-      const askingAlternative = ALTERNATIVE_KEYWORDS.some(k => lowerQuery.includes(k));
+      const askingAlternative = lowerQuery.includes("sanin") && ALTERNATIVE_KEYWORDS.some(k => lowerQuery.includes(k));
       
       if (askingAlternative) {
         await fetch(TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendMessage", {
