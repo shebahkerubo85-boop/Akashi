@@ -80,7 +80,7 @@ async function tryModel(apiKey, model, messages) {
       "Authorization": "Bearer " + apiKey,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ model, messages, max_tokens: 1024, temperature: 0.8 })
+    body: JSON.stringify({ model, messages, max_tokens: 1024, temperature: 0.8, reasoning_format: "hidden" })
   });
   if (!resp.ok) return null;
   const data = await resp.json();
@@ -199,7 +199,17 @@ export default {
 
       ctx.waitUntil(saveUserHistory(env, extracted.userId, extracted.displayName, history));
 
-      const cleanReply = reply.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+      let cleanReply = reply
+        .replace(/<think>[\s\S]*?<\/think>/g, "")
+        .replace(/^(?:\s*[\d]+\.\s*\*\*(?:Analyze|Check|Determine|Draft|Identify|Formulate|Refine)[^\n]*\n)+/gm, "")
+        .replace(/^(?:Here.s a thinking process:?[\s\S]*?)(?=\n\n)/i, "")
+        .replace(/^\s*(?:Okay|Let me|Alright|So the user)[^\n]*(?:\n|$)/gim, "")
+        .trim();
+      // If reply is very long and contains numbered analysis steps before actual answer, keep only last paragraph block
+      if (cleanReply.length > 500 && (cleanReply.includes("Check Against") || cleanReply.includes("Draft Response") || cleanReply.includes("thinking process"))) {
+        const paragraphs = cleanReply.split("\n\n");
+        cleanReply = paragraphs[paragraphs.length - 1].trim();
+      }
       const chatId = extracted.replyTo || update.message?.chat?.id;
       await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, cleanReply);
 
