@@ -202,10 +202,128 @@ async function sendTelegramMessage(token, chatId, text) {
   });
 }
 
+async function handleDiscordInteraction(request, env) {
+  const interaction = await request.json();
+
+  // Ping/verification
+  if (interaction.type === 1) {
+    return new Response(JSON.stringify({ type: 1 }), {
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+
+  if (interaction.type !== 2) return new Response("ok", { status: 200 });
+
+  const command = interaction.data.name;
+  const userId = interaction.member?.user?.id || interaction.user?.id;
+  const displayName = interaction.member?.user?.username || interaction.user?.username || "user";
+  const channelId = interaction.channel_id;
+  const token = interaction.token;
+
+  async function respond(text) {
+    await fetch("https://discord.com/api/v10/interactions/" + interaction.id + "/" + token + "/callback", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: 4, data: { content: text } })
+    });
+  }
+
+  async function followUp(text) {
+    await fetch("https://discord.com/api/v10/webhooks/" + env.DISCORD_APP_ID + "/" + token, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ content: text })
+    });
+  }
+
+  try {
+    if (command === "learn") {
+      const knowledge = interaction.data.options?.[0]?.value || "";
+      if (!knowledge) {
+        await respond("What do you want me to learn?");
+        return new Response("ok", { status: 200 });
+      }
+      let learned = [];
+      try {
+        const raw = await env.USER_MEMORY.get("learned_knowledge");
+        if (raw) learned = JSON.parse(raw);
+      } catch {}
+      learned.push({ added: Date.now(), by: displayName, content: knowledge });
+      await env.USER_MEMORY.put("learned_knowledge", JSON.stringify(learned));
+      await respond("Noted. Filed away.");
+      return new Response("ok", { status: 200 });
+    }
+
+    if (command === "ask") {
+      const question = interaction.data.options?.[0]?.value || "";
+      if (!question) {
+        await respond("What do you want to ask?");
+        return new Response("ok", { status: 200 });
+      }
+
+      // Acknowledge immediately (Discord requires response within 3s)
+      await fetch("https://discord.com/api/v10/interactions/" + interaction.id + "/" + token + "/callback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ type: 5 })
+      });
+
+      // Get system prompt and history
+      const systemPrompt = await getSystemPrompt(env);
+      let history = [];
+      try {
+        const raw = await env.USER_MEMORY.get("history_dc_" + userId);
+        if (raw) history = JSON.parse(raw);
+      } catch {}
+
+      let profile = null;
+      try {
+        const raw = await env.USER_MEMORY.get("user_dc_" + userId);
+        if (raw) profile = JSON.parse(raw);
+      } catch {}
+
+      const reply = await callAI(env, systemPrompt, profile, history, question);
+      
+      let cleanReply = reply
+        .replace(/<think>[\s\S]*?<\/think>/g, "")
+        .trim();
+      // Discord message limit
+      if (cleanReply.length > 1900) cleanReply = cleanReply.slice(0, 1897) + "...";
+
+      history.push({ role: "user", content: question });
+      history.push({ role: "assistant", content: cleanReply });
+
+      ctx.waitUntil(env.USER_MEMORY.put(
+        "history_dc_" + userId,
+        JSON.stringify(history.slice(-20))
+      ));
+
+      await followUp(cleanReply);
+      return new Response("ok", { status: 200 });
+    }
+  } catch (err) {
+    console.error("Discord error:", err.message);
+    try {
+      await followUp("Something broke. Try again in a bit.");
+    } catch {}
+  }
+
+  return new Response("ok", { status: 200 });
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method !== "POST") {
       return new Response("San is alive", { status: 200 });
+    }
+
+    // Check if this is a Discord interaction
+    const userAgent = request.headers.get("user-agent") || "";
+    const isDiscord = request.headers.get("x-signature-ed25519") !== null ||
+                      request.headers.get("x-signature-timestamp") !== null;
+
+    if (isDiscord && env.DISCORD_BOT_TOKEN) {
+      return handleDiscordInteraction(request.clone(), env);
     }
 
     try {
