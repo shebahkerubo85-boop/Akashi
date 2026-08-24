@@ -173,6 +173,28 @@ export default {
           return Response.json({ status: "denied" });
         }
         const knowledge = query.replace("/learn", "").trim();
+        
+        // Sticker learning: /learn sticker <keyword> <file_id>
+        if (knowledge.startsWith("sticker ")) {
+          const parts = knowledge.replace("sticker ", "").split(" ");
+          if (parts.length >= 2) {
+            const keyword = parts[0].toLowerCase();
+            const fileId = parts.slice(1).join(" ");
+            let stickers = {};
+            try {
+              const raw = await env.USER_MEMORY.get("sticker_triggers");
+              if (raw) stickers = JSON.parse(raw);
+            } catch {}
+            stickers[keyword] = fileId;
+            await env.USER_MEMORY.put("sticker_triggers", JSON.stringify(stickers));
+            await fetch(TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendMessage", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ chat_id: msg.chat.id, text: "Sticker learned. I\'ll send it when I see '" + keyword + "'." })
+            });
+            return Response.json({ status: "sticker_learned" });
+          }
+        }
         if (knowledge) {
           let learned = [];
           try {
@@ -217,6 +239,25 @@ export default {
         const errBody = await sendResp.text();
         console.error("Telegram send failed:", errBody);
       }
+
+      // Check for sticker triggers
+      try {
+        const stickersRaw = await env.USER_MEMORY.get("sticker_triggers");
+        if (stickersRaw) {
+          const stickers = JSON.parse(stickersRaw);
+          const lowerQuery = query.toLowerCase();
+          for (const [kw, fid] of Object.entries(stickers)) {
+            if (lowerQuery.includes(kw)) {
+              await fetch(TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendSticker", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ chat_id: msg.chat.id, sticker: fid })
+              });
+              break;
+            }
+          }
+        }
+      } catch(e) { console.error("sticker err:", e.message); }
 
       return new Response(JSON.stringify({ status: "replied" }), { headers: { "Content-Type": "application/json" } });
     } catch (err) {
