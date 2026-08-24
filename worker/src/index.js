@@ -39,6 +39,38 @@ async function ai(env, sysPrompt, query) {
   throw new Error("all models failed");
 }
 
+async function verifyDiscordSignature(env, signature, timestamp, body) {
+  try {
+    const PUBLIC_KEY = env.DISCORD_PUBLIC_KEY;
+    if (!PUBLIC_KEY) return false;
+    
+    const hexToUint8 = (hex) => {
+      const arr = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < hex.length; i += 2) {
+        arr[i / 2] = parseInt(hex.substr(i, 2), 16);
+      }
+      return arr;
+    };
+    
+    const keyData = hexToUint8(PUBLIC_KEY);
+    const sigData = hexToUint8(signature);
+    const message = new TextEncoder().encode(timestamp + body);
+    
+    const key = await crypto.subtle.importKey(
+      "raw",
+      keyData,
+      { name: "Ed25519" },
+      false,
+      ["verify"]
+    );
+    
+    return await crypto.subtle.verify("Ed25519", key, sigData, message);
+  } catch(e) {
+    console.error("verify error:", e.message);
+    return false;
+  }
+}
+
 export default {
   async fetch(request, env, ctx) {
     if (request.method === "GET") {
@@ -48,9 +80,18 @@ export default {
       return new Response("Method not allowed", { status: 405 });
     }
 
-    // Discord interactions have x-signature-ed25519 header
-    if (request.headers.get("x-signature-ed25519")) {
+    // Discord interactions - verify signature first
+    const sig = request.headers.get("x-signature-ed25519");
+    const ts = request.headers.get("x-signature-timestamp");
+    
+    if (sig && ts) {
       try {
+        // Verify Ed25519 signature
+        const rawBody = await request.text();
+        const valid = await verifyDiscordSignature(env, sig, ts, rawBody);
+        if (!valid) {
+          return new Response("Invalid signature", { status: 401 });
+        }
         const i = await request.json();
         if (i.type === 1) return new Response(JSON.stringify({ type: 1 }), { headers: { "Content-Type": "application/json" } });
         if (i.type === 2 && i.data?.name === "ask") {
