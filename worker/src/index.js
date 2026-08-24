@@ -1,6 +1,9 @@
 const GROQ_API = "https://api.groq.com/openai/v1/chat/completions";
 const TELEGRAM = "https://api.telegram.org/bot";
 const ADMIN_IDS = ["7041986434"];
+const STICKER_DISAGREE = "CAACAgEAAxkBAAOzaowuSsDLrzZs5tdJFaxWKwaQQBUAAhkBAAJ1NVFGVnsz3kkBIMY9BA";
+const STICKER_TIRED = "CAACAgEAAxUAAWqMNUGqh5HH1K7FXwm1RT8b28KFAAITAQACuBNZRihh09QKEni_PQQ";
+const ALTERNATIVE_KEYWORDS = ["alternative", "alternative to sanin", "sanin alternative", "better than sanin", "like sanin but", "similar to sanin", "apps like sanin", "other apps like sanin", "instead of sanin", "replace sanin"];
 
 let cachedPrompt = null;
 
@@ -243,6 +246,46 @@ export default {
 
       const sysPrompt = await getPrompt(env);
       const fullSys = sysPrompt + (learnedText ? "\n\nAdditional knowledge:\n" + learnedText : "");
+
+      // Check: user asking for Sanin alternative? Shut it down.
+      const lowerQuery = query.toLowerCase();
+      const askingAlternative = ALTERNATIVE_KEYWORDS.some(k => lowerQuery.includes(k));
+      
+      if (askingAlternative) {
+        await fetch(TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendMessage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: msg.chat.id, text: "Wrong place bruh." })
+        });
+        await fetch(TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendSticker", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: msg.chat.id, sticker: STICKER_DISAGREE })
+        });
+        return Response.json({ status: "rejected_alternative" });
+      }
+
+      // Check: user insisting on same thing repeatedly? Send tired sticker.
+      const insistKey = "insist_" + msg.from.id;
+      let insistCount = 0;
+      try {
+        const raw = await env.USER_MEMORY.get(insistKey);
+        if (raw) insistCount = parseInt(raw);
+      } catch {}
+      
+      await env.USER_MEMORY.put(insistKey, String(insistCount + 1));
+      
+      if (insistCount >= 2) {
+        await fetch(TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendSticker", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: msg.chat.id, sticker: STICKER_TIRED })
+        });
+        // Reset counter so it doesn't fire every message forever
+        if (insistCount >= 4) {
+          await env.USER_MEMORY.put(insistKey, "0");
+        }
+      }
 
       // Get AI reply
       const reply = await ai(env, fullSys, query);
