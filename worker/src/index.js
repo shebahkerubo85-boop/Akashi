@@ -348,7 +348,7 @@ export default {
       try {
         aiMessages = [
           { role: "system", content: fullSys },
-          ...history.slice(-10).map(h => ({ role: h.r, content: h.c })),
+          ...history.slice(-25).map(h => ({ role: h.r, content: h.c })),
           { role: "user", content: query }
         ];
       } catch {
