@@ -98,17 +98,36 @@ async function saveUserHistory(env, userId, name, messages) {
 }
 
 async function tryModel(apiKey, model, messages) {
+  let body = { model, messages, max_tokens: 1024, temperature: 0.8 };
+  
+  // For gpt-oss models, strip reasoning from output
+  if (model.includes("gpt-oss")) {
+    body.reasoning_effort = "low";
+    body.reasoning_format = "parsed";
+  }
+  
   const resp = await fetch(GROQ_API, {
     method: "POST",
     headers: {
       "Authorization": "Bearer " + apiKey,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ model, messages, max_tokens: 1024, temperature: 0.8, reasoning_format: "hidden" })
+    body: JSON.stringify(body)
   });
   if (!resp.ok) return null;
   const data = await resp.json();
-  return data.choices?.[0]?.message?.content || null;
+  const msg = data.choices?.[0]?.message;
+  if (!msg) return null;
+  
+  // If content is empty but reasoning has text, use reasoning
+  let result = msg.content || "";
+  if (!result.trim() && msg.reasoning) {
+    // Extract final answer from reasoning (usually last paragraph)
+    const parts = msg.reasoning.split("\n\n");
+    result = parts[parts.length - 1].trim();
+  }
+  
+  return result.trim() ? result : null;
 }
 
 async function webSearch(query) {
