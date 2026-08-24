@@ -1,402 +1,153 @@
-const TELEGRAM_API = "https://api.telegram.org/bot";
 const GROQ_API = "https://api.groq.com/openai/v1/chat/completions";
-const GROQ_MODELS = [
-  "openai/gpt-oss-120b",
-  "openai/gpt-oss-20b",
-  "qwen/qwen3.6-27b"
-];
+const TELEGRAM = "https://api.telegram.org/bot";
 
-// System prompt is fetched from repo and cached
 let cachedPrompt = null;
 
-async function getSystemPrompt(env) {
+async function getPrompt(env) {
   if (cachedPrompt) return cachedPrompt;
-  try {
-    const resp = await fetch(env.SYSTEM_PROMPT_URL);
-    if (!resp.ok) throw new Error("fetch failed");
-    const text = await resp.text();
-    cachedPrompt = text;
-    return text;
-  } catch {
-    return "You are San, bot for Sanin community. Sharp-witted, helpful, has attitude.";
-  }
+  const r = await fetch(env.SYSTEM_PROMPT_URL);
+  cachedPrompt = await r.text();
+  return cachedPrompt;
 }
 
-async function handleLearnCommand(env, message) {
-  const text = message.text;
-  if (!text.startsWith("/learn")) return false;
-  if (!text.slice(6).trim()) return true;
-
-  const userId = String(message.from.id);
-  // Get existing knowledge
-  let knowledge = [];
-  try {
-    const raw = await env.USER_MEMORY.get("learned_knowledge");
-    if (raw) knowledge = JSON.parse(raw);
-  } catch {}
-  
-  knowledge.push({
-    added: Date.now(),
-    by: message.from.first_name,
-    content: text.slice(7).trim()
-  });
-
-  await env.USER_MEMORY.put("learned_knowledge", JSON.stringify(knowledge));
-  await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, message.chat.id, "Noted. Filed away.");
-  return true;
-}
-
-function extractQuery(update, botUsername) {
-  const message = update.message || update.edited_message;
-  if (!message || !message.text) return null;
-
-  const chatType = message.chat.type;
-  const text = message.text;
-  const mentioned = text.includes("@" + botUsername);
-
-  if (chatType === "private") return { query: text, userId: message.from.id, displayName: message.from.first_name };
-
-  // Groups: only act when mentioned or replying to someone
-  if (!mentioned && !message.reply_to_message) return null;
-
-  const userText = text.replace(new RegExp("@" + botUsername, "g"), "").trim();
-
-  if (userText && message.reply_to_message?.text) {
-    return {
-      query: "Previous message for context: " + message.reply_to_message.text +
-             "\n\nMy actual question: " + userText,
-      userId: message.from.id,
-      displayName: message.from.first_name,
-      replyTo: message.chat.id
-    };
-  }
-  if (userText) {
-    return { query: userText, userId: message.from.id, displayName: message.from.first_name, replyTo: message.chat.id };
-  }
-  if (message.reply_to_message?.text) {
-    return { query: message.reply_to_message.text, userId: message.from.id, displayName: message.from.first_name, replyTo: message.chat.id };
-  }
-
-  return null;
-}
-
-async function getUserHistory(env, userId) {
-  const key = "history_" + userId;
-  const data = await env.USER_MEMORY.get(key);
-  return data ? JSON.parse(data) : [];
-}
-
-async function saveUserHistory(env, userId, name, messages) {
-  await env.USER_MEMORY.put(
-    "user_" + userId,
-    JSON.stringify({ name, updated: Date.now() })
-  );
-  await env.USER_MEMORY.put(
-    "history_" + userId,
-    JSON.stringify(messages.slice(-20))
-  );
-}
-
-async function tryModel(apiKey, model, messages) {
-  let body = { model, messages, max_tokens: 1024, temperature: 0.8 };
-  
-  // For gpt-oss models, strip reasoning from output
-  if (model.includes("gpt-oss")) {
-    body.reasoning_effort = "low";
-    body.reasoning_format = "parsed";
-  }
-  
-  const resp = await fetch(GROQ_API, {
-    method: "POST",
-    headers: {
-      "Authorization": "Bearer " + apiKey,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(body)
-  });
-  if (!resp.ok) return null;
-  const data = await resp.json();
-  const msg = data.choices?.[0]?.message;
-  if (!msg) return null;
-  
-  // If content is empty but reasoning has text, use reasoning
-  let result = msg.content || "";
-  if (!result.trim() && msg.reasoning) {
-    // Extract final answer from reasoning (usually last paragraph)
-    const parts = msg.reasoning.split("\n\n");
-    result = parts[parts.length - 1].trim();
-  }
-  
-  return result.trim() ? result : null;
-}
-
-async function webSearch(query) {
-  try {
-    const resp = await fetch(
-      "https://api.duckduckgo.com/?q=" + encodeURIComponent(query) + "&format=json&no_html=1",
-      { headers: { "User-Agent": "SanBot/1.0" } }
-    );
-    const data = await resp.json();
-    if (data.AbstractText) return data.AbstractText;
-    if (data.Answer) return data.Answer;
-    if (data.RelatedTopics && data.RelatedTopics.length > 0) {
-      return data.RelatedTopics.slice(0, 3).map(t => t.Text).join("\n");
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-async function callAI(env, systemPrompt, profile, history, query) {
-  let learned = "";
-  try {
-    const raw = await env.USER_MEMORY.get("learned_knowledge");
-    if (raw) {
-      const items = JSON.parse(raw);
-      learned = items.map(k => k.content).join("\n");
-    }
-  } catch {}
-
-  const contextParts = [
-    { role: "system", content: systemPrompt },
-    ...(learned ? [{ role: "system", content: "[Additional knowledge you have been taught:\n" + learned + "]" }] : []),
-    { role: "system", content: "[You are talking to: " + (profile ? profile.name : "someone") + "]" }
-  ];
-
-  if (profile && profile.notes) {
-    contextParts.push({ role: "system", content: "[Personality notes: " + profile.notes + "]" });
-  }
-
-  const messages = [
-    ...contextParts,
-    ...history.map(h => ({ role: h.role, content: h.content })),
-    { role: "user", content: query }
-  ];
-
-  // Only search web for anime-related queries
-  const animeKeywords = ["anime","manga","episode","season","sanin","dantotsu","anilist",
-    "myanimelist","extension","sub","dub","streaming","watch","player","subtitle",
-    "fire tv","android tv","shield","apk","source","repo","crash","bug","install",
-    "download","update","tracking","simkl","tmdb","cloudstream","exoplayer","pip",
-    "otaku","waifu","shounen","isekai","release","airing"];
-  const lowerQuery = query.toLowerCase();
-  const isAnimeRelated = animeKeywords.some(k => lowerQuery.includes(k));
-
-  let searchContext = "";
-  if (isAnimeRelated) {
+async function ai(env, sysPrompt, query) {
+  const models = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b"];
+  for (const m of models) {
     try {
-      const searchResult = await webSearch(query);
-      if (searchResult) {
-        searchContext = "\n\n[Web search result: " + searchResult + "]";
-        messages[messages.length - 1].content = query + searchContext;
-      }
-    } catch {}
-  }
-
-  // Groq models in priority order
-  for (const model of GROQ_MODELS) {
-    try {
-      const reply = await tryModel(env.GROQ_API_KEY, model, messages);
-      if (reply) return reply;
-    } catch {}
-  }
-
-  // Fallback to Cloudflare Workers AI
-  if (env.AI) {
-    const result = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
-      messages: messages.map(m => ({ role: m.role === "system" ? "system" : m.role, content: m.content }))
-    });
-    if (result && result.response) return result.response;
-  }
-
-  throw new Error("All AI providers exhausted");
-}
-
-async function sendTelegramMessage(token, chatId, text) {
-  await fetch(TELEGRAM_API + token + "/sendMessage", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text })
-  });
-}
-
-async function handleDiscordInteraction(request, env) {
-  const interaction = await request.json();
-
-  // Ping/verification
-  if (interaction.type === 1) {
-    return new Response(JSON.stringify({ type: 1 }), {
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-
-  if (interaction.type !== 2) return new Response("ok", { status: 200 });
-
-  const command = interaction.data.name;
-  const userId = interaction.member?.user?.id || interaction.user?.id;
-  const displayName = interaction.member?.user?.username || interaction.user?.username || "user";
-  const channelId = interaction.channel_id;
-  const token = interaction.token;
-
-  async function respond(text) {
-    await fetch("https://discord.com/api/v10/interactions/" + interaction.id + "/" + token + "/callback", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: 4, data: { content: text } })
-    });
-  }
-
-  async function followUp(text) {
-    await fetch("https://discord.com/api/v10/webhooks/" + env.DISCORD_APP_ID + "/" + token, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content: text })
-    });
-  }
-
-  try {
-    if (command === "learn") {
-      const knowledge = interaction.data.options?.[0]?.value || "";
-      if (!knowledge) {
-        await respond("What do you want me to learn?");
-        return new Response("ok", { status: 200 });
-      }
-      let learned = [];
-      try {
-        const raw = await env.USER_MEMORY.get("learned_knowledge");
-        if (raw) learned = JSON.parse(raw);
-      } catch {}
-      learned.push({ added: Date.now(), by: displayName, content: knowledge });
-      await env.USER_MEMORY.put("learned_knowledge", JSON.stringify(learned));
-      await respond("Noted. Filed away.");
-      return new Response("ok", { status: 200 });
-    }
-
-    if (command === "ask") {
-      const question = interaction.data.options?.[0]?.value || "";
-      if (!question) {
-        await respond("What do you want to ask?");
-        return new Response("ok", { status: 200 });
-      }
-
-      // Acknowledge immediately (Discord requires response within 3s)
-      await fetch("https://discord.com/api/v10/interactions/" + interaction.id + "/" + token + "/callback", {
+      const r = await fetch(GROQ_API, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: 5 })
+        headers: { Authorization: "Bearer " + env.GROQ_API_KEY, "Content-Type": "application/json" },
+        body: JSON.stringify({ model: m, messages: [
+          { role: "system", content: sysPrompt },
+          { role: "user", content: query }
+        ], max_tokens: 1024, temperature: 0.8 })
       });
-
-      // Get system prompt and history
-      const systemPrompt = await getSystemPrompt(env);
-      let history = [];
-      try {
-        const raw = await env.USER_MEMORY.get("history_dc_" + userId);
-        if (raw) history = JSON.parse(raw);
-      } catch {}
-
-      let profile = null;
-      try {
-        const raw = await env.USER_MEMORY.get("user_dc_" + userId);
-        if (raw) profile = JSON.parse(raw);
-      } catch {}
-
-      const reply = await callAI(env, systemPrompt, profile, history, question);
-      
-      let cleanReply = reply
-        .replace(/<think>[\s\S]*?<\/think>/g, "")
-        .trim();
-      // Discord message limit
-      if (cleanReply.length > 1900) cleanReply = cleanReply.slice(0, 1897) + "...";
-
-      history.push({ role: "user", content: question });
-      history.push({ role: "assistant", content: cleanReply });
-
-      ctx.waitUntil(env.USER_MEMORY.put(
-        "history_dc_" + userId,
-        JSON.stringify(history.slice(-20))
-      ));
-
-      await followUp(cleanReply);
-      return new Response("ok", { status: 200 });
-    }
-  } catch (err) {
-    console.error("Discord error:", err.message);
-    try {
-      await followUp("Something broke. Try again in a bit.");
-    } catch {}
+      if (!r.ok) continue;
+      const d = await r.json();
+      let txt = d.choices?.[0]?.message?.content || "";
+      txt = txt.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+      if (txt) return txt;
+    } catch(e) { console.error(m, e.message); }
   }
-
-  return new Response("ok", { status: 200 });
+  // Cloudflare AI fallback
+  if (env.AI) {
+    const r = await env.AI.run("@cf/meta/llama-3.1-8b-instruct", {
+      messages: [{ role: "system", content: sysPrompt }, { role: "user", content: query }]
+    });
+    if (r?.response) return r.response;
+  }
+  throw new Error("all models failed");
 }
 
 export default {
   async fetch(request, env, ctx) {
+    if (request.method === "GET") {
+      return new Response("San is alive");
+    }
     if (request.method !== "POST") {
-      return new Response("San is alive", { status: 200 });
+      return new Response("Method not allowed", { status: 405 });
     }
 
-    // Check if this is a Discord interaction
-    const userAgent = request.headers.get("user-agent") || "";
-    const isDiscord = request.headers.get("x-signature-ed25519") !== null ||
-                      request.headers.get("x-signature-timestamp") !== null;
-
-    if (isDiscord && env.DISCORD_BOT_TOKEN) {
-      return handleDiscordInteraction(request.clone(), env);
+    // Discord interactions have x-signature-ed25519 header
+    if (request.headers.get("x-signature-ed25519")) {
+      try {
+        const i = await request.json();
+        if (i.type === 1) return Response.json({ type: 1 });
+        if (i.type === 2 && i.data?.name === "ask") {
+          const q = i.data.options?.[0]?.value || "";
+          ctx.waitUntil((async () => {
+            const sp = await getPrompt(env);
+            const reply = await ai(env, sp, q);
+            await fetch("https://discord.com/api/v10/webhooks/" + env.DISCORD_APP_ID + "/" + i.token, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ content: reply.slice(0, 1900) })
+            });
+          })().catch(console.error));
+          return Response.json({ type: 5 });
+        }
+      } catch(e) { console.error("discord err:", e.message); }
+      return new Response("ok");
     }
 
+    // Telegram
     try {
       const update = await request.json();
-      const botInfo = await fetch(TELEGRAM_API + env.TELEGRAM_BOT_TOKEN + "/getMe");
-      const botData = await botInfo.json();
-      const botUsername = botData.result.username;
-
-      // Check for /learn command
       const msg = update.message || update.edited_message;
-      if (msg && msg.text && msg.text.startsWith("/learn")) {
-        ctx.waitUntil(handleLearnCommand(env, msg));
-        return new Response("ok", { status: 200 });
+      if (!msg || !msg.text) return Response.json({ status: "no_text" });
+
+      const text = msg.text;
+      const chatType = msg.chat.type;
+      const botUsername = env.BOT_USERNAME || "Shippun_sanbot";
+      const mentioned = text.includes("@" + botUsername);
+
+      // Groups: only respond when tagged or replying
+      if (chatType !== "private" && !mentioned && !msg.reply_to_message) {
+        return Response.json({ status: "ignored_group" });
       }
 
-      const extracted = extractQuery(update, botUsername);
-      if (!extracted) return new Response("ignored", { status: 200 });
+      let query = text;
+      if (chatType !== "private") {
+        query = text.replace(new RegExp("@" + botUsername, "g"), "").trim();
+        if (!query && msg.reply_to_message?.text) {
+          query = msg.reply_to_message.text;
+        }
+      }
 
-      const systemPrompt = await getSystemPrompt(env);
-      const history = await getUserHistory(env, extracted.userId);
+      if (!query) return Response.json({ status: "no_query" });
 
-      let profile = null;
+      // /learn command
+      if (query.startsWith("/learn")) {
+        const knowledge = query.replace("/learn", "").trim();
+        if (knowledge) {
+          let learned = [];
+          try {
+            const raw = await env.USER_MEMORY.get("learned_knowledge");
+            if (raw) learned = JSON.parse(raw);
+          } catch {}
+          learned.push({ t: Date.now(), c: knowledge });
+          await env.USER_MEMORY.put("learned_knowledge", JSON.stringify(learned));
+        }
+        await fetch(TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendMessage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: msg.chat.id, text: knowledge ? "Noted." : "Usage: /learn <text>" })
+        });
+        return Response.json({ status: "learned" });
+      }
+
+      // Load knowledge + history
+      let learnedText = "";
       try {
-        const profileRaw = await env.USER_MEMORY.get("user_" + extracted.userId);
-        if (profileRaw) profile = JSON.parse(profileRaw);
+        const raw = await env.USER_MEMORY.get("learned_knowledge");
+        if (raw) {
+          learnedText = JSON.parse(raw).map(k => k.c).join("\n");
+        }
       } catch {}
 
-      const reply = await callAI(env, systemPrompt, profile, history, extracted.query);
-      console.log("AI REPLY:", reply ? reply.substring(0, 100) : "NULL");
+      const sysPrompt = await getPrompt(env);
+      const fullSys = sysPrompt + (learnedText ? "\n\nAdditional knowledge:\n" + learnedText : "");
 
-      history.push({ role: "user", content: extracted.query });
-      history.push({ role: "assistant", content: reply });
+      // Get AI reply
+      const reply = await ai(env, fullSys, query);
 
-      ctx.waitUntil(saveUserHistory(env, extracted.userId, extracted.displayName, history));
+      // Send to Telegram
+      const sendUrl = TELEGRAM + env.TELEGRAM_BOT_TOKEN + "/sendMessage";
+      const sendResp = await fetch(sendUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: msg.chat.id, text: reply })
+      });
 
-      let cleanReply = reply
-        .replace(/<think>[\s\S]*?<\/think>/g, "")
-        .replace(/^(?:\s*[\d]+\.\s*\*\*(?:Analyze|Check|Determine|Draft|Identify|Formulate|Refine)[^\n]*\n)+/gm, "")
-        .replace(/^(?:Here.s a thinking process:?[\s\S]*?)(?=\n\n)/i, "")
-        .replace(/^\s*(?:Okay|Let me|Alright|So the user)[^\n]*(?:\n|$)/gim, "")
-        .trim();
-      // If reply is very long and contains numbered analysis steps before actual answer, keep only last paragraph block
-      if (cleanReply.length > 500 && (cleanReply.includes("Check Against") || cleanReply.includes("Draft Response") || cleanReply.includes("thinking process"))) {
-        const paragraphs = cleanReply.split("\n\n");
-        cleanReply = paragraphs[paragraphs.length - 1].trim();
+      if (!sendResp.ok) {
+        const errBody = await sendResp.text();
+        console.error("Telegram send failed:", errBody);
       }
-      const chatId = extracted.replyTo || update.message?.chat?.id;
-      await sendTelegramMessage(env.TELEGRAM_BOT_TOKEN, chatId, cleanReply);
-      console.log("SENT OK");
 
-      return new Response("ok", { status: 200 });
+      return Response.json({ status: "replied" });
     } catch (err) {
-      console.error("Worker error:", err.message);
-      return new Response(JSON.stringify({error: err.message}), { status: 200, headers: {"Content-Type": "application/json"} });
+      console.error("telegram handler error:", err.message);
+      return Response.json({ error: err.message }, { status: 200 });
     }
   }
 };
